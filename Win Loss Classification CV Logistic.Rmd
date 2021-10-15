@@ -1,0 +1,41 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+set.seed(1)
+Logistic.Control <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE)
+
+Five.Importance.2 <- train(teamRslt~., data = Five.Importance_Subset, method = "glm", family = "binomial", trControl = Logistic.Control, tuneLength = 5)
+Five.Importance.2
+Five.Importance2.Pred <- predict(Five.Importance.2, newdata = Five.Importance_Testing)
+confusionMatrix(data = Five.Importance2.Pred, Five.Importance_Testing$teamRslt)
+
+Five.RFE.2 <- train(teamRslt~., data = Five.RFE_Subset, method = "glm", family = "binomial", trControl = Logistic.Control, tuneLength = 5)
+Five.RFE.2
+Five.RFE2.Pred <- predict(Five.RFE.2, newdata = Five.RFE_Testing)
+confusionMatrix(data = Five.RFE2.Pred, Five.RFE_Testing$teamRslt)
+
+
+Fifteen.Importance.2 <- train(teamRslt~., data = Fifteen.Importance_Subset, method = "glm", family = "binomial", trControl = Logistic.Control, tuneLength = 5)
+Fifteen.Importance.2
+Fifteen.Importance2.Pred <- predict(Fifteen.Importance.2, newdata = Fifteen.Importance_Testing)
+confusionMatrix(data = Fifteen.Importance2.Pred, Fifteen.Importance_Testing$teamRslt)
+
+Fifteen.RFE.2 <- train(teamRslt~., data = Fifteen.RFE_Subset, method = "glm", family = "binomial", trControl = Logistic.Control, tuneLength = 5)
+Fifteen.RFE.2
+Fifteen.RFE2.Pred <- predict(Fifteen.RFE.2, newdata = Fifteen.RFE_Testing)
+confusionMatrix(data = Fifteen.RFE2.Pred, Fifteen.RFE_Testing$teamRslt)
+
+
+TwentyFive.Importance.2 <- train(teamRslt~., data = TwentyFive.Importance_Subset, method = "glm", family = "binomial", trControl = Logistic.Control, tuneLength = 5)
+TwentyFive.Importance.2
+TwentyFive.Importance2.Pred <- predict(TwentyFive.Importance.2, newdata = TwentyFive.Importance_Testing)
+confusionMatrix(data = TwentyFive.Importance2.Pred, TwentyFive.Importance_Testing$teamRslt)
+
+TwentyFive.RFE.2 <- train(teamRslt~., data = TwentyFive.RFE_Subset, method = "glm", family = "binomial", trControl = Logistic.Control, tuneLength = 5)
+TwentyFive.RFE.2
+TwentyFive.RFE2.Pred <- predict(TwentyFive.RFE.2, newdata = TwentyFive.RFE_Testing)
+confusionMatrix(data = TwentyFive.RFE2.Pred, TwentyFive.RFE_Testing$teamRslt)
+```

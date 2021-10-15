@@ -1,0 +1,509 @@
+---
+title: "Linear Regressions Using a 25 Game Rolling Average"
+author(s): "Jak Terpak" "Ben Sons" "Austen Horton"
+date: "3/22/2021"
+output: html_document
+---
+
+***Load Necessary Libraries***
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(corrplot)
+library(tools)
+library(Metrics)
+library(glmnet)
+library(AppliedPredictiveModeling)
+library(boot)
+library(car)
+library(leaps)
+library(tidyr)
+library(sqldf)
+library(caret)
+
+```
+***Manually Created Functions***
+```{r Functions, include = FALSE}
+eval_results <- function(true, predicted, df) {
+  SSE <- sum((predicted - true)^2)
+  SST <- sum((true - mean(true))^2)
+  R_square <- 1 - SSE / SST
+  RMSE = sqrt(SSE/nrow(df))
+
+  
+  # Model performance metrics
+data.frame(
+  RMSE = RMSE,
+  Rsquare = R_square
+)
+  
+}
+
+```
+
+***Average Statistics from the Past 25 games***
+```{r 25 Game Rolling Average, include=FALSE}
+rawStats.df <- read.csv("2012-18_teamBoxScore_Updated.txt", stringsAsFactors = F)
+names(rawStats.df)[1] <- "gmDate"
+dumVar <- c('teamConf','teamDiv','opptConf','opptDiv', 'gmTime', 'seasTyp', 'offLNm1', 'offFNm1', 'offLNm2',
+            'offFNm2', 'offLNm3', 'offFNm3', 'teamMin', 'teamTRB','teamPTS1',
+            'teamPTS7', 'teamPTS6', 'teamPTS5', 'teamPTS4', 'teamPTS3', 'teamPTS2','teamPTS8',
+            'teamPTS1', 'teamTRB','teamPTS1', 'opptPTS8', 'opptPTS7', 'opptPTS6', 'opptPTS5', 
+            'opptPTS4', 'opptPTS3', 'opptPTS2', 'opptPTS1', 'opptTRB', 'opptMin')
+
+relStats.df <- select(rawStats.df,-all_of(dumVar))
+temptable <-relStats.df
+
+relStats.df$teamAbbr <- as.numeric(as.factor(relStats.df$teamAbbr))
+relStats.df$teamLoc <- as.numeric(as.factor(relStats.df$teamLoc))
+relStats.df$teamRslt <- as.numeric(as.factor(relStats.df$teamRslt))
+relStats.df$opptAbbr <- as.numeric(as.factor(relStats.df$opptAbbr))
+relStats.df$opptLoc <- as.numeric(as.factor(relStats.df$opptLoc))
+relStats.df$opptRslt <- as.numeric(as.factor(relStats.df$opptRslt))
+
+team_list <- 1:30
+seasons <- list(list('2012-10-30','2013-04-17'),list('2013-10-29','2014-04-16'),
+                list('2014-10-28','2015-04-15'),list('2015-10-27','2016-04-13'),
+                list('2016-10-25','2017-04-12'),list('2017-10-17','2018-04-11'))
+
+final_df <- relStats.df[0,]
+
+#test_2012_Season <- relStats.df[relStats.df$gmDate >= seasons[[1]][[1]] & relStats.df$gmDate <= seasons[[1]][[2]] , ] 
+
+for (i in seasons){
+  temp_season_df <- relStats.df[relStats.df$gmDate >= i[[1]] & relStats.df$gmDate <= i[[2]] , ] 
+  for (j in team_list){
+    temp_team_df <- temp_season_df[temp_season_df$teamAbbr == j, ]
+    for (row in 1: nrow(temp_team_df)){
+      temp_previous_games_df <- temp_team_df[temp_team_df$gmDate < temp_team_df[row,"gmDate"],]
+      temp_previous_games_df<-temp_previous_games_df[with(temp_previous_games_df,order(gmDate)), ]
+      temp_previous_games_df<-temp_previous_games_df[order(nrow(temp_previous_games_df):1), ]
+      temp_previous_games_df<-temp_previous_games_df[1:25,]
+      #Oppt Previous Games
+      temp_oppt_df <- temp_season_df[temp_season_df$teamAbbr == temp_team_df[row,"opptAbbr"], ]
+      temp_oppt_previous_games_df <- temp_oppt_df[temp_oppt_df$gmDate < temp_team_df[row,"gmDate"],]
+      temp_oppt_previous_games_df<-temp_oppt_previous_games_df[with(temp_oppt_previous_games_df,order(gmDate)), ]
+      temp_oppt_previous_games_df<-temp_oppt_previous_games_df[1:25,]
+      if(nrow(temp_previous_games_df) < 25 & nrow(temp_oppt_previous_games_df) < 25){
+        temp_final_df = data.frame(temp_team_df[row,1],temp_team_df[row,2],
+                                   temp_team_df[row,3],temp_team_df[row,4],
+                                   temp_team_df[row,5],temp_team_df[row,6],NA,NA,NA,NA,NA,NA,NA,NA,
+                                   NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,
+                                   NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,
+                                   temp_team_df[row,46],temp_team_df[row,47],
+                                   temp_team_df[row,48],temp_team_df[row,49],
+                                   temp_team_df[row,50],NA,NA,NA,NA,NA,NA,NA,NA,NA,
+                                   NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,
+                                   NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA, temp_team_df[row,90],temp_team_df[row,91],
+                                   temp_team_df[row,92],temp_team_df[row,93])
+        
+      }
+      else if(nrow(temp_previous_games_df) >= 25 & nrow(temp_oppt_previous_games_df) < 25){
+        temp_final_df = data.frame(temp_team_df[row,1],temp_team_df[row,2],
+                                   temp_team_df[row,3],temp_team_df[row,4],
+                                   temp_team_df[row,5],temp_team_df[row,6],mean(temp_previous_games_df[,6]),
+                                   mean(temp_previous_games_df[,7]),mean(temp_previous_games_df[,8]),
+                                   mean(temp_previous_games_df[,9]),mean(temp_previous_games_df[,10]),
+                                   mean(temp_previous_games_df[,11]),mean(temp_previous_games_df[,12]),
+                                   mean(temp_previous_games_df[,13]),mean(temp_previous_games_df[,14]),
+                                   mean(temp_previous_games_df[,15]),mean(temp_previous_games_df[,16]),
+                                   mean(temp_previous_games_df[,17]),mean(temp_previous_games_df[,18]),
+                                   mean(temp_previous_games_df[,19]),mean(temp_previous_games_df[,20]),
+                                   mean(temp_previous_games_df[,21]),mean(temp_previous_games_df[,22]),
+                                   mean(temp_previous_games_df[,23]),mean(temp_previous_games_df[,24]),
+                                   mean(temp_previous_games_df[,25]),mean(temp_previous_games_df[,26]),
+                                   mean(temp_previous_games_df[,27]),mean(temp_previous_games_df[,28]),
+                                   mean(temp_previous_games_df[,29]),mean(temp_previous_games_df[,30]),
+                                   mean(temp_previous_games_df[,31]),mean(temp_previous_games_df[,32]),
+                                   mean(temp_previous_games_df[,33]),mean(temp_previous_games_df[,34]),
+                                   mean(temp_previous_games_df[,35]),mean(temp_previous_games_df[,36]),
+                                   mean(temp_previous_games_df[,37]),mean(temp_previous_games_df[,38]),
+                                   mean(temp_previous_games_df[,39]),mean(temp_previous_games_df[,40]),
+                                   mean(temp_previous_games_df[,41]),mean(temp_previous_games_df[,42]),
+                                   mean(temp_previous_games_df[,43]),mean(temp_previous_games_df[,44]),
+                                   mean(temp_previous_games_df[,45]),
+                                   temp_team_df[row,46],temp_team_df[row,47],
+                                   temp_team_df[row,48],temp_team_df[row,49],
+                                   temp_team_df[row,50],NA,NA,NA,NA,NA,NA,NA,NA,
+                                   NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,
+                                   NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,temp_team_df[row,90],temp_team_df[row,91],
+                                   temp_team_df[row,92],temp_team_df[row,93])
+        
+      }
+      else if(nrow(temp_previous_games_df) < 25 & nrow(temp_oppt_previous_games_df) >= 25){
+        temp_final_df = data.frame(temp_team_df[row,1],temp_team_df[row,2],
+                                   temp_team_df[row,3],temp_team_df[row,4],
+                                   temp_team_df[row,5],temp_team_df[row,6],NA,NA,NA,NA,NA,NA,NA,
+                                   NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,
+                                   NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,
+                                   temp_team_df[row,46],temp_team_df[row,47],
+                                   temp_team_df[row,48],temp_team_df[row,49],
+                                   temp_team_df[row,50], mean(temp_oppt_previous_games_df[,6]),
+                                   mean(temp_oppt_previous_games_df[,7]),mean(temp_oppt_previous_games_df[,8]),
+                                   mean(temp_oppt_previous_games_df[,9]),mean(temp_oppt_previous_games_df[,10]),
+                                   mean(temp_oppt_previous_games_df[,11]),mean(temp_oppt_previous_games_df[,12]),
+                                   mean(temp_oppt_previous_games_df[,13]),mean(temp_oppt_previous_games_df[,14]),
+                                   mean(temp_oppt_previous_games_df[,15]),mean(temp_oppt_previous_games_df[,16]),
+                                   mean(temp_oppt_previous_games_df[,17]),mean(temp_oppt_previous_games_df[,18]),
+                                   mean(temp_oppt_previous_games_df[,19]),mean(temp_oppt_previous_games_df[,20]),
+                                   mean(temp_oppt_previous_games_df[,21]),mean(temp_oppt_previous_games_df[,22]),
+                                   mean(temp_oppt_previous_games_df[,23]),mean(temp_oppt_previous_games_df[,24]),
+                                   mean(temp_oppt_previous_games_df[,25]),mean(temp_oppt_previous_games_df[,26]),
+                                   mean(temp_oppt_previous_games_df[,27]),mean(temp_oppt_previous_games_df[,28]),
+                                   mean(temp_oppt_previous_games_df[,29]),mean(temp_oppt_previous_games_df[,30]),
+                                   mean(temp_oppt_previous_games_df[,31]),mean(temp_oppt_previous_games_df[,32]),
+                                   mean(temp_oppt_previous_games_df[,33]),mean(temp_oppt_previous_games_df[,34]),
+                                   mean(temp_oppt_previous_games_df[,35]),mean(temp_oppt_previous_games_df[,36]),
+                                   mean(temp_oppt_previous_games_df[,37]),mean(temp_oppt_previous_games_df[,38]),
+                                   mean(temp_oppt_previous_games_df[,39]),mean(temp_oppt_previous_games_df[,40]),
+                                   mean(temp_oppt_previous_games_df[,41]),mean(temp_oppt_previous_games_df[,42]),
+                                   mean(temp_oppt_previous_games_df[,43]),mean(temp_oppt_previous_games_df[,44]),
+                                   mean(temp_oppt_previous_games_df[,45]),temp_team_df[row,90],temp_team_df[row,91],
+                                   temp_team_df[row,92],temp_team_df[row,93])
+      }
+      else{
+        temp_final_df = data.frame(temp_team_df[row,1],temp_team_df[row,2],
+                                   temp_team_df[row,3],temp_team_df[row,4],
+                                   temp_team_df[row,5],temp_team_df[row,6],
+                                   mean(temp_previous_games_df[,6]),
+                                   mean(temp_previous_games_df[,7]),mean(temp_previous_games_df[,8]),
+                                   mean(temp_previous_games_df[,9]),mean(temp_previous_games_df[,10]),
+                                   mean(temp_previous_games_df[,11]),mean(temp_previous_games_df[,12]),
+                                   mean(temp_previous_games_df[,13]),mean(temp_previous_games_df[,14]),
+                                   mean(temp_previous_games_df[,15]),mean(temp_previous_games_df[,16]),
+                                   mean(temp_previous_games_df[,17]),mean(temp_previous_games_df[,18]),
+                                   mean(temp_previous_games_df[,19]),mean(temp_previous_games_df[,20]),
+                                   mean(temp_previous_games_df[,21]),mean(temp_previous_games_df[,22]),
+                                   mean(temp_previous_games_df[,23]),mean(temp_previous_games_df[,24]),
+                                   mean(temp_previous_games_df[,25]),mean(temp_previous_games_df[,26]),
+                                   mean(temp_previous_games_df[,27]),mean(temp_previous_games_df[,28]),
+                                   mean(temp_previous_games_df[,29]),mean(temp_previous_games_df[,30]),
+                                   mean(temp_previous_games_df[,31]),mean(temp_previous_games_df[,32]),
+                                   mean(temp_previous_games_df[,33]),mean(temp_previous_games_df[,34]),
+                                   mean(temp_previous_games_df[,35]),mean(temp_previous_games_df[,36]),
+                                   mean(temp_previous_games_df[,37]),mean(temp_previous_games_df[,38]),
+                                   mean(temp_previous_games_df[,39]),mean(temp_previous_games_df[,40]),
+                                   mean(temp_previous_games_df[,41]),mean(temp_previous_games_df[,42]),
+                                   mean(temp_previous_games_df[,43]),mean(temp_previous_games_df[,44]),
+                                   mean(temp_previous_games_df[,45]),
+                                   temp_team_df[row,46],temp_team_df[row,47],
+                                   temp_team_df[row,48],temp_team_df[row,49],
+                                   temp_team_df[row,50],mean(temp_oppt_previous_games_df[,6]),
+                                   mean(temp_oppt_previous_games_df[,7]),mean(temp_oppt_previous_games_df[,8]),
+                                   mean(temp_oppt_previous_games_df[,9]),mean(temp_oppt_previous_games_df[,10]),
+                                   mean(temp_oppt_previous_games_df[,11]),mean(temp_oppt_previous_games_df[,12]),
+                                   mean(temp_oppt_previous_games_df[,13]),mean(temp_oppt_previous_games_df[,14]),
+                                   mean(temp_oppt_previous_games_df[,15]),mean(temp_oppt_previous_games_df[,16]),
+                                   mean(temp_oppt_previous_games_df[,17]),mean(temp_oppt_previous_games_df[,18]),
+                                   mean(temp_oppt_previous_games_df[,19]),mean(temp_oppt_previous_games_df[,20]),
+                                   mean(temp_oppt_previous_games_df[,21]),mean(temp_oppt_previous_games_df[,22]),
+                                   mean(temp_oppt_previous_games_df[,23]),mean(temp_oppt_previous_games_df[,24]),
+                                   mean(temp_oppt_previous_games_df[,25]),mean(temp_oppt_previous_games_df[,26]),
+                                   mean(temp_oppt_previous_games_df[,27]),mean(temp_oppt_previous_games_df[,28]),
+                                   mean(temp_oppt_previous_games_df[,29]),mean(temp_oppt_previous_games_df[,30]),
+                                   mean(temp_oppt_previous_games_df[,31]),mean(temp_oppt_previous_games_df[,32]),
+                                   mean(temp_oppt_previous_games_df[,33]),mean(temp_oppt_previous_games_df[,34]),
+                                   mean(temp_oppt_previous_games_df[,35]),mean(temp_oppt_previous_games_df[,36]),
+                                   mean(temp_oppt_previous_games_df[,37]),mean(temp_oppt_previous_games_df[,38]),
+                                   mean(temp_oppt_previous_games_df[,39]),mean(temp_oppt_previous_games_df[,40]),
+                                   mean(temp_oppt_previous_games_df[,41]),mean(temp_oppt_previous_games_df[,42]),
+                                   mean(temp_oppt_previous_games_df[,43]),mean(temp_oppt_previous_games_df[,44]),
+                                   mean(temp_oppt_previous_games_df[,45]),temp_team_df[row,90],temp_team_df[row,91],
+                                   temp_team_df[row,92],temp_team_df[row,93])
+        
+      }
+      final_df <- rbind(final_df,temp_final_df)
+    }
+    
+  }
+}
+
+names(final_df)<-c(names(relStats.df[1:6]),"teamAveragePts",names(relStats.df[7:50]),"opptAveragePts",names(relStats.df[51:93]))
+
+
+
+```
+
+***Initial Linear Models***
+```{r Linear Regression and Cross Validation, include=FALSE}
+
+#TRANSFER AND PARSE DATA
+
+dumVar <- c('gmDate', 'teamFGA', 'teamFG.', 'team2PA', 'team2P.', 'team3PA', 'team3P.', 'teamFTA',
+            'teamFT.', 'teamASST.', 'teamBLKR', 'teamPPS', 'teamFIC', 'teamFIC40',
+            'teamEDiff', 'teamPlay.', 'teamAR','opptFGA', 'opptFG.', 'oppt2PA', 'oppt2P.', 
+            'oppt3PA', 'oppt3P.', 'opptFTA','opptFT.', 'opptASST.', 'opptBLKR', 
+            'opptPPS', 'opptFIC', 'opptFIC40','opptEDiff', 'opptPlay.', 'opptAR', 'poss')
+
+relStats.df <- select(final_df,-all_of(dumVar))
+
+## Record indices of NA rows before removing them to initially run regression.
+naRelStats <- which(is.na(relStats.df))
+relStats.df <- na.omit(relStats.df)
+
+var1 <- c('teamPTS', 'teamElo','opptElo', 'teamOrtg', 'opptDrtg', 'teamLoc', 'teamDayOff', 'teamAST', 'teamTO', 'teamFGM', 'team2PM', 'team3PM', 'teamFTM',
+             'teamORB', 'teamTREB.', 'teamTS.', 'teamEFG.', 'teamOREB.','teamTO.',
+             'teamAST.TO', 'opptDayOff', 'opptSTL', 'opptBLK','opptPF', 'opptDRB', 'opptDREB.', 
+             'opptSTL.', 'opptBLK.', 'opptSTL.TO')
+
+
+log1 <- c('teamPTS','teamRslt', 'teamElo','opptElo', 'teamOrtg', 'opptDrtg', 'teamLoc', 'teamDayOff', 'teamAST', 'teamTO', 'teamFGM', 'team2PM', 'team3PM', 'teamFTM',
+             'teamORB', 'teamTREB.', 'teamTS.', 'teamEFG.', 'teamOREB.','teamTO.',
+             'teamAST.TO', 'opptDayOff', 'opptSTL', 'opptBLK','opptPF', 'opptDRB', 'opptDREB.', 
+             'opptSTL.', 'opptBLK.', 'opptSTL.TO')
+
+
+pointStats1 <- select(relStats.df, all_of(var1))
+pointPlot1 <- cor(pointStats1)
+corrplot(pointPlot1, method='number')
+
+
+sample_rows <- sample(dim(relStats.df)[1], size = 0.8*dim(relStats.df)[1], replace = F)
+
+df1.train <- pointStats1[sample_rows,]
+df1.test <- pointStats1[-sample_rows,]
+
+inputs1 <- as.matrix(df1.train[,-1])
+responses1 <- as.matrix(df1.train[,1])
+testInputs1 <- as.matrix(df1.test[,-1])
+testResponse1 <- as.matrix(df1.test[,1])
+
+
+# Regular Linear Model
+linModel1 <- lm(teamPTS~., data=df1.train)
+linModel1.train <- predict(linModel1, df1.train)
+lin1MSE.train <- mse(linModel1.train,responses1)
+lin1RMSE.train <- rmse(linModel1.train, responses1)
+
+linModel1.test <- predict(linModel1, df1.test)
+lin1MSE.test <- mse(linModel1.test, testResponse1)
+lin1RMSE.test <- rmse(linModel1.test, testResponse1)
+
+#***********Standard Step-Wise Variable Selection for Linear Model 1***********
+linStep1 <- step(linModel1, direction = "both", trace=0)
+linStep1.test <- predict(linStep1, df1.test)
+linStep1MSE.test <- mse(linStep1.test, testResponse1)
+linStep1RMSE.test <- rmse(linStep1.test, testResponse1)
+
+
+
+# LOOCV
+#suppressWarnings(lin1.loocv <- train(teamPTS~., data = df1.train, method='lm', trControl = trainControl(method="LOOCV")))
+#lin1.loocv.test <- predict(lin1.loocv, df1.test)
+#lin1.loocv.MSE <- mse(lin1.loocv.test, testResponse1)
+#lin1.loocv.RMSE <- rmse(lin1.loocv.test, testResponse1)
+
+# K-Fold Cross-Validation
+kcvControl <- trainControl(method="cv", number = 10)
+lin1.kcv <- train(teamPTS~., data = df1.train, method='lm', trControl = kcvControl )
+lin1.kcv.test <- predict(lin1.kcv, df1.test)
+lin1.kcv.MSE <- mse(lin1.kcv.test, testResponse1)
+lin1.kcv.RMSE <- rmse(lin1.kcv.test, testResponse1)
+
+
+
+# Ridge Regression
+cv.ridge1.train <- cv.glmnet(inputs1, responses1, alpha=0)
+ridgeLambda1.train <- cv.ridge1.train$lambda.min
+
+ridgeModel1 <- glmnet(inputs1, responses1, alpha=0)
+ridgeModel1.train <- predict(ridgeModel1, newx = inputs1, s=ridgeLambda1.train)
+ridge1MSE.train <- mse(ridgeModel1.train, responses1)
+ridge1RMSE.train <- eval_results(responses1, ridgeModel1.train, df1.train)[1]
+ridge1R.train <- eval_results(responses1, ridgeModel1.train, df1.train)[2]
+
+
+cv.ridge1.test <- cv.glmnet(testInputs1, testResponse1, alpha=0)
+ridgeLambda1.test <- cv.ridge1.test$lambda.min
+
+ridgeModel1.test <- predict(ridgeModel1, newx=testInputs1, s=ridgeLambda1.test)
+ridge1MSE.test <- mean((ridgeModel1.test - testResponse1)^2)
+ridge1RMSE.test <- eval_results(testResponse1, ridgeModel1.test, df1.test)[1]
+ridge1R.test <- eval_results(testResponse1, ridgeModel1.test, df1.test)[2]
+
+
+# Lasso Regression
+cv.lasso1.train <- cv.glmnet(inputs1, responses1, alpha=1)
+lassoLambda1.train <- cv.lasso1.train$lambda.min
+
+
+lassoModel1 <- glmnet(inputs1, responses1, alpha=1)
+lassoModel1.train <- predict(lassoModel1, newx = inputs1, s=lassoLambda1.train)
+lasso1MSE <- mse(lassoModel1.train, responses1)
+lasso1RMSE.train <- eval_results(responses1, lassoModel1.train, df1.train)[1]
+lasso1R.train <- eval_results(responses1, lassoModel1.train, df1.train)[2]
+
+cv.lasso1.test <- cv.glmnet(testInputs1, testResponse1, alpha=1)
+lassoLambda1.test <- cv.lasso1.test$lambda.min
+
+lassoModel1.test <- predict(lassoModel1, newx = testInputs1, s=lassoLambda1.train)
+lasso1MSE.test <- mse(lassoModel1.test, testResponse1)
+lasso1RMSE.test <- eval_results(testResponse1, lassoModel1.test, df1.test)[1]
+lasso1R.test <- eval_results(testResponse1, lassoModel1.test, df1.test)[2]
+
+summary(linModel1)
+summary(linStep1)
+#summary(lin1.loocv)
+summary(lin1.kcv)
+
+# Logistic Regression to Predict Winner
+logStats1 <- select(relStats.df, all_of(log1))
+
+winIndex <- logStats1$teamRslt == 2
+lossIndex <- logStats1$teamRslt == 1
+logStats1$teamRslt[lossIndex] <- 0
+logStats1$teamRslt[winIndex] <- 1
+
+dfLog1.train <- logStats1[sample_rows,]
+dfLog1.test <- logStats1[-sample_rows,]
+
+logInputs1.train <- as.matrix(dfLog1.train[,-1])
+logResponse1.train <- as.matrix(dfLog1.train[,1])
+logInputs1.test <- as.matrix(dfLog1.test[,-1])
+logResponse1.test <- as.matrix(dfLog1.test[,1])
+
+logModel1 <- glm(teamRslt~., data = dfLog1.train, family = "binomial")
+logModel1.train <- predict(logModel1, newx = logInputs1.train)
+log1.MSE.train <- mse(logModel1.train, logResponse1.train)
+log1RMSE.train <- eval_results(logResponse1.train, logModel1.train, dfLog1.train)[1]
+log1R.train <- eval_results(logResponse1.train, logModel1.train, dfLog1.train)[2]
+
+logModel1.test <- predict(logModel1, newx = logInputs1.test)[1:2029]
+log1.MSE.test <- mse(logModel1.test, logResponse1.test)
+log1RMSE.test <- eval_results(logResponse1.test, logModel1.test, dfLog1.test)[1]
+log1R.test <- eval_results(logResponse1.test, logModel1.test, dfLog1.test)[2]
+
+
+```
+
+
+***Linear Regressions with Alternative Subset of Variables***
+```{r Regressing an Alternative Set of Predictors, include=FALSE}
+
+var2 <- c('teamPTS', 'teamElo','opptElo',  'teamOrtg', 'opptDrtg', 'teamLoc', 'teamDayOff', 'teamAST', 'teamTO', 'teamFGM', 'team2PM', 'team3PM', 'teamFTM',
+             'teamORB', 'teamTREB.', 'teamTS.', 'teamEFG.', 'teamOREB.','teamTO.', 'opptDayOff', 'opptSTL', 'opptBLK', 'opptDRB', 'opptSTL.', 'opptBLK.')
+
+log2 <- c('teamRslt', 'teamElo','opptElo',  'teamOrtg', 'opptDrtg', 'teamLoc', 'teamDayOff','teamPTS', 'teamAST', 'teamTO', 'teamFGM', 'team2PM', 'team3PM', 'teamFTM',
+             'teamORB', 'teamTREB.', 'teamTS.', 'teamEFG.', 'teamOREB.','teamTO.', 'opptDayOff', 'opptSTL', 'opptBLK', 'opptDRB', 'opptSTL.', 'opptBLK.')
+
+
+pointStats2 <- select(relStats.df, all_of(var2))
+pointPlot2 <- cor(pointStats2)
+corrplot(pointPlot2, method="circle")
+
+df2.train <- pointStats2[sample_rows,]
+df2.test <- pointStats2[-sample_rows,]
+
+inputs2 <- as.matrix(df2.train[,-1])
+responses2 <- as.matrix(df2.train[,1])
+testInputs2 <- as.matrix(df2.test[,-1])
+testResponse2 <- as.matrix(df2.test[,1])
+
+
+
+linModel2 <- lm(teamPTS~., data=df2.train)
+linModel2.train <- predict(linModel2, df2.train)
+lin2MSE.train <- mse(linModel2.train, responses2)
+lin2RMSE.train <- rmse(linModel2.train, responses2)
+
+linModel2.test <- predict(linModel2, df2.test)
+lin2MSE.test <- mse(linModel2.test, testResponse2)
+lin2RMSE.test <- rmse(linModel2.test, testResponse2)
+ 
+# # Standard Step-Wise Variable Selection for Linear Model 2
+linStep2 <- step(linModel2, direction = "both", trace=0)
+linStep2.test <- predict(linStep2, df2.test)
+linStep2MSE.test <- mse(linStep2.test, testResponse2)
+linStep2RMSE.test <- rmse(linStep2.test, testResponse2)
+
+
+# LOOCV
+#suppressWarnings(lin2.loocv <- train(teamPTS~., data = df2.train, method='lm', trControl = trainControl(method="LOOCV")))
+#lin2.loocv.test <- predict(lin2.loocv, df2.test)
+#lin2.loocv.MSE <- mse(lin2.loocv.test, testResponse2)
+#lin2.loocv.RMSE <- rmse(lin2.loocv.test, testResponse2)
+
+
+# K-Fold Cross-Validation
+kcvControl2 <- trainControl(method="cv", number = 10)
+lin2.kcv <- train(teamPTS~., data = df2.train, method='lm', trControl = kcvControl2 )
+lin2.kcv.test <- predict(lin2.kcv, df2.test)
+lin2.kcv.MSE <- mse(lin2.kcv.test, testResponse2)
+lin2.kcv.RMSE <- rmse(lin2.kcv.test, testResponse2)
+
+
+
+# Ridge Regression
+cv.ridge2.train <- cv.glmnet(inputs2, responses2, alpha=0)
+ridgeLambda2.train <- cv.ridge2.train$lambda.min
+
+ridgeModel2 <- glmnet(inputs2, responses2, alpha=0)
+ridgeModel2.train <- predict(ridgeModel2, newx = inputs2, s=ridgeLambda2.train)
+ridge2MSE.train <- mse(ridgeModel2.train, responses2)
+ridge2RMSE.train <- eval_results(responses2, ridgeModel2.train, df2.train)[1]
+ridge2R.train <- eval_results(responses2, ridgeModel2.train, df2.train)[2]
+
+
+cv.ridge2.test <- cv.glmnet(testInputs2, testResponse2, alpha=0)
+ridgeLambda2.test <- cv.ridge2.test$lambda.min
+
+ridgeModel2.test <- predict(ridgeModel2, newx=testInputs2, s=ridgeLambda2.test)
+ridge2MSE.test <- mse(ridgeModel2.test, testResponse2)
+ridge2RMSE.test <- eval_results(testResponse2, ridgeModel2.test, df2.test)[1]
+ridge2R.test <- eval_results(testResponse2, ridgeModel2.test, df2.test)[2]
+
+
+# Lasso Regression
+cv.lasso2.train <- cv.glmnet(inputs2, responses2, alpha=1)
+lassoLambda2.train <- cv.lasso2.train$lambda.min
+
+
+lassoModel2 <- glmnet(inputs2, responses2, alpha=1)
+lassoModel2.train <- predict(lassoModel2, newx = inputs2, s=lassoLambda2.train)
+lasso2MSE <- mse(lassoModel2.train, responses2)
+lasso2RMSE.train <- eval_results(responses2, lassoModel2.train, df2.train)[1]
+lasso2R.train <- eval_results(responses2, lassoModel2.train, df2.train)[2]
+
+cv.lasso2.test <- cv.glmnet(testInputs2, testResponse2, alpha=1)
+lassoLambda2.test <- cv.lasso2.test$lambda.min
+
+lassoModel2.test <- predict(lassoModel2, newx = testInputs2, s=lassoLambda2.train)
+lasso2MSE.test <- mse(lassoModel2.test, testResponse2)
+lasso2RMSE.test <- eval_results(testResponse2, lassoModel2.test, df2.test)[1]
+lasso2R.test <- eval_results(testResponse2, lassoModel2.test, df2.test)[2]
+
+
+# Logistic Regression
+logStats2 <- select(relStats.df, all_of(log2))
+logStats2$teamRslt[lossIndex] <- 0
+logStats2$teamRslt[winIndex] <- 1
+
+dfLog2.train <- logStats2[sample_rows,]
+dfLog2.test <- logStats2[-sample_rows,]
+
+logInputs2.train <- as.matrix(dfLog2.train[,-1])
+logResponse2.train <- as.matrix(dfLog2.train[,1])
+logInputs2.test <- as.matrix(dfLog2.test[,-1])
+logResponse2.test <- as.matrix(dfLog2.test[,1])
+
+logModel2 <- glm(teamRslt~., data = dfLog2.train, family = "binomial")
+logModel2.train <- predict(logModel2, newx = logInputs2.train)
+log2.MSE.train <- mse(logModel2.train, logResponse2.train)
+log2RMSE.train <- eval_results(logResponse2.train, logModel2.train, dfLog2.train)[1]
+log2R.train <- eval_results(logResponse2.train, logModel2.train, dfLog2.train)[2]
+
+logModel2.test <- predict(logModel2, newx = logInputs2.test)[1:2029]
+log2.MSE.test <- mse(logModel2.test, logResponse2.test)
+log2RMSE.test <- eval_results(logResponse2.test, logModel2.test, dfLog2.test)[1]
+log2R.test <- eval_results(logResponse2.test, logModel2.test, dfLog2.test)[2]
+
+
+summary(linModel2)
+summary(linStep2)
+#summary(lin2.loocv)
+summary(lin2.kcv)
+summary(logModel2)
+
+
+save(list=ls(all=T),file='RD1_Model_Madness.RData')
+```

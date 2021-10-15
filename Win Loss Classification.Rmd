@@ -1,0 +1,530 @@
+---
+title: "Win Loss Classification on Team Data"
+author: "Austen Bradley Horton"
+date: "3/26/2021"
+output: html_document
+---
+
+***Library Load***
+
+```{r}
+library(dplyr)
+library(sqldf)
+library(tidyr)
+library(caret)
+library(mlbench)
+library(corrplot)
+library(e1071)
+library(rpart)
+library(randomForest)
+library(tidyverse)
+library(car)
+```
+
+***Uploading & Cleaning the Data***
+
+Here we will be uploading our data and cleaning it as well. We will begin by removing some initial variables that we do not need and changing some variables to numeric as we will be running correlation plots on them. Finally, we will utilize a function to loop through our data and retrieve average values for the last 5 games, 15 games, and 25 games; this loop will iterate through each team and each season and due to this, we will have to omit the NA's that we receive from the initial number of games per team, per season.
+
+```{r}
+rawStats.df <- read.csv("TeamBoxScoreData.csv", stringsAsFactors = F)
+names(rawStats.df)[1] <- "gmDate"
+dumVar <- c('teamConf','teamDiv','opptConf','opptDiv', 'gmTime', 'seasTyp', 'offLNm1', 'offFNm1', 'offLNm2',
+            'offFNm2', 'offLNm3', 'offFNm3', 'teamMin', 'teamTRB','teamPTS1',
+            'teamPTS7', 'teamPTS6', 'teamPTS5', 'teamPTS4', 'teamPTS3', 'teamPTS2','teamPTS8',
+            'teamPTS1', 'teamTRB','teamPTS1', 'opptPTS8', 'opptPTS7', 'opptPTS6', 'opptPTS5', 
+            'opptPTS4', 'opptPTS3', 'opptPTS2', 'opptPTS1', 'opptTRB', 'opptMin')
+
+relStats.df <- select(rawStats.df,-all_of(dumVar))
+temptable <-relStats.df
+
+relStats.df$teamAbbr <- as.numeric(as.factor(relStats.df$teamAbbr))
+relStats.df$teamLoc <- as.numeric(as.factor(relStats.df$teamLoc))
+relStats.df$teamRslt <- as.numeric(as.factor(relStats.df$teamRslt))
+relStats.df$opptAbbr <- as.numeric(as.factor(relStats.df$opptAbbr))
+relStats.df$opptLoc <- as.numeric(as.factor(relStats.df$opptLoc))
+relStats.df$opptRslt <- as.numeric(as.factor(relStats.df$opptRslt))
+
+create_df <- function(N,dataframe){
+  team_list <- 1:30
+  seasons <- list(list('2012-10-30','2013-04-17'),list('2013-10-29','2014-04-16'),
+                  list('2014-10-28','2015-04-15'),list('2015-10-27','2016-04-13'),
+                  list('2016-10-25','2017-04-12'),list('2017-10-17','2018-04-11'))
+  
+  final_df <- dataframe[0,]
+  
+  for (i in seasons){
+    temp_season_df <- dataframe[dataframe$gmDate >= i[[1]] & dataframe$gmDate <= i[[2]] , ] 
+    for (j in team_list){
+      temp_team_df <- temp_season_df[temp_season_df$teamAbbr == j, ]
+      for (row in 1: nrow(temp_team_df)){
+        temp_previous_games_df <- temp_team_df[temp_team_df$gmDate < temp_team_df[row,"gmDate"],]
+        temp_previous_games_df<-temp_previous_games_df[with(temp_previous_games_df,order(gmDate)), ]
+        temp_previous_games_df<-temp_previous_games_df[order(nrow(temp_previous_games_df):1), ]
+        temp_previous_games_df<-temp_previous_games_df[1:N,]
+        #Oppt Previous Games
+        temp_oppt_df <- temp_season_df[temp_season_df$teamAbbr == temp_team_df[row,"opptAbbr"], ]
+        temp_oppt_previous_games_df <- temp_oppt_df[temp_oppt_df$gmDate < temp_team_df[row,"gmDate"],]
+        temp_oppt_previous_games_df<-temp_oppt_previous_games_df[with(temp_oppt_previous_games_df,order(gmDate)), ]
+        temp_oppt_previous_games_df<-temp_oppt_previous_games_df[1:N,]
+        if(nrow(temp_previous_games_df) < N & nrow(temp_oppt_previous_games_df) < N){
+          temp_final_df = data.frame(temp_team_df[row,1],temp_team_df[row,2],
+                                     temp_team_df[row,3],temp_team_df[row,4],
+                                     temp_team_df[row,5],temp_team_df[row,6],
+                                     rep(NA,40),
+                                     temp_team_df[row,46],temp_team_df[row,47],
+                                     temp_team_df[row,48],temp_team_df[row,49],
+                                     temp_team_df[row,50],
+                                     rep(NA,40),
+                                     temp_team_df[row,90],temp_team_df[row,91],
+                                     temp_team_df[row,92],temp_team_df[row,93])
+          
+        }
+        else if(nrow(temp_previous_games_df) >= N & nrow(temp_oppt_previous_games_df) < N){
+          temp_final_df = data.frame(temp_team_df[row,1],temp_team_df[row,2],
+                                     temp_team_df[row,3],temp_team_df[row,4],
+                                     temp_team_df[row,5],temp_team_df[row,6],mean(temp_previous_games_df[,6]),
+                                     mean(temp_previous_games_df[,7]),mean(temp_previous_games_df[,8]),
+                                     mean(temp_previous_games_df[,9]),mean(temp_previous_games_df[,10]),
+                                     mean(temp_previous_games_df[,11]),mean(temp_previous_games_df[,12]),
+                                     mean(temp_previous_games_df[,13]),mean(temp_previous_games_df[,14]),
+                                     mean(temp_previous_games_df[,15]),mean(temp_previous_games_df[,16]),
+                                     mean(temp_previous_games_df[,17]),mean(temp_previous_games_df[,18]),
+                                     mean(temp_previous_games_df[,19]),mean(temp_previous_games_df[,20]),
+                                     mean(temp_previous_games_df[,21]),mean(temp_previous_games_df[,22]),
+                                     mean(temp_previous_games_df[,23]),mean(temp_previous_games_df[,24]),
+                                     mean(temp_previous_games_df[,25]),mean(temp_previous_games_df[,26]),
+                                     mean(temp_previous_games_df[,27]),mean(temp_previous_games_df[,28]),
+                                     mean(temp_previous_games_df[,29]),mean(temp_previous_games_df[,30]),
+                                     mean(temp_previous_games_df[,31]),mean(temp_previous_games_df[,32]),
+                                     mean(temp_previous_games_df[,33]),mean(temp_previous_games_df[,34]),
+                                     mean(temp_previous_games_df[,35]),mean(temp_previous_games_df[,36]),
+                                     mean(temp_previous_games_df[,37]),mean(temp_previous_games_df[,38]),
+                                     mean(temp_previous_games_df[,39]),mean(temp_previous_games_df[,40]),
+                                     mean(temp_previous_games_df[,41]),mean(temp_previous_games_df[,42]),
+                                     mean(temp_previous_games_df[,43]),mean(temp_previous_games_df[,44]),
+                                     mean(temp_previous_games_df[,45]),
+                                     temp_team_df[row,46],temp_team_df[row,47],
+                                     temp_team_df[row,48],temp_team_df[row,49],
+                                     temp_team_df[row,50],
+                                     rep(NA,40),
+                                     temp_team_df[row,90],temp_team_df[row,91],
+                                     temp_team_df[row,92],temp_team_df[row,93])
+          
+        }
+        else if(nrow(temp_previous_games_df) < N & nrow(temp_oppt_previous_games_df) >= N){
+          temp_final_df = data.frame(temp_team_df[row,1],temp_team_df[row,2],
+                                     temp_team_df[row,3],temp_team_df[row,4],
+                                     temp_team_df[row,5],temp_team_df[row,6],
+                                     rep(NA,40),
+                                     temp_team_df[row,46],temp_team_df[row,47],
+                                     temp_team_df[row,48],temp_team_df[row,49],
+                                     temp_team_df[row,50], mean(temp_oppt_previous_games_df[,6]),
+                                     mean(temp_oppt_previous_games_df[,7]),mean(temp_oppt_previous_games_df[,8]),
+                                     mean(temp_oppt_previous_games_df[,9]),mean(temp_oppt_previous_games_df[,10]),
+                                     mean(temp_oppt_previous_games_df[,11]),mean(temp_oppt_previous_games_df[,12]),
+                                     mean(temp_oppt_previous_games_df[,13]),mean(temp_oppt_previous_games_df[,14]),
+                                     mean(temp_oppt_previous_games_df[,15]),mean(temp_oppt_previous_games_df[,16]),
+                                     mean(temp_oppt_previous_games_df[,17]),mean(temp_oppt_previous_games_df[,18]),
+                                     mean(temp_oppt_previous_games_df[,19]),mean(temp_oppt_previous_games_df[,20]),
+                                     mean(temp_oppt_previous_games_df[,21]),mean(temp_oppt_previous_games_df[,22]),
+                                     mean(temp_oppt_previous_games_df[,23]),mean(temp_oppt_previous_games_df[,24]),
+                                     mean(temp_oppt_previous_games_df[,25]),mean(temp_oppt_previous_games_df[,26]),
+                                     mean(temp_oppt_previous_games_df[,27]),mean(temp_oppt_previous_games_df[,28]),
+                                     mean(temp_oppt_previous_games_df[,29]),mean(temp_oppt_previous_games_df[,30]),
+                                     mean(temp_oppt_previous_games_df[,31]),mean(temp_oppt_previous_games_df[,32]),
+                                     mean(temp_oppt_previous_games_df[,33]),mean(temp_oppt_previous_games_df[,34]),
+                                     mean(temp_oppt_previous_games_df[,35]),mean(temp_oppt_previous_games_df[,36]),
+                                     mean(temp_oppt_previous_games_df[,37]),mean(temp_oppt_previous_games_df[,38]),
+                                     mean(temp_oppt_previous_games_df[,39]),mean(temp_oppt_previous_games_df[,40]),
+                                     mean(temp_oppt_previous_games_df[,41]),mean(temp_oppt_previous_games_df[,42]),
+                                     mean(temp_oppt_previous_games_df[,43]),mean(temp_oppt_previous_games_df[,44]),
+                                     mean(temp_oppt_previous_games_df[,45]),temp_team_df[row,90],temp_team_df[row,91],
+                                     temp_team_df[row,92],temp_team_df[row,93])
+        }
+        else{
+          temp_final_df = data.frame(temp_team_df[row,1],temp_team_df[row,2],
+                                     temp_team_df[row,3],temp_team_df[row,4],
+                                     temp_team_df[row,5],temp_team_df[row,6],
+                                     mean(temp_previous_games_df[,6]),
+                                     mean(temp_previous_games_df[,7]),mean(temp_previous_games_df[,8]),
+                                     mean(temp_previous_games_df[,9]),mean(temp_previous_games_df[,10]),
+                                     mean(temp_previous_games_df[,11]),mean(temp_previous_games_df[,12]),
+                                     mean(temp_previous_games_df[,13]),mean(temp_previous_games_df[,14]),
+                                     mean(temp_previous_games_df[,15]),mean(temp_previous_games_df[,16]),
+                                     mean(temp_previous_games_df[,17]),mean(temp_previous_games_df[,18]),
+                                     mean(temp_previous_games_df[,19]),mean(temp_previous_games_df[,20]),
+                                     mean(temp_previous_games_df[,21]),mean(temp_previous_games_df[,22]),
+                                     mean(temp_previous_games_df[,23]),mean(temp_previous_games_df[,24]),
+                                     mean(temp_previous_games_df[,25]),mean(temp_previous_games_df[,26]),
+                                     mean(temp_previous_games_df[,27]),mean(temp_previous_games_df[,28]),
+                                     mean(temp_previous_games_df[,29]),mean(temp_previous_games_df[,30]),
+                                     mean(temp_previous_games_df[,31]),mean(temp_previous_games_df[,32]),
+                                     mean(temp_previous_games_df[,33]),mean(temp_previous_games_df[,34]),
+                                     mean(temp_previous_games_df[,35]),mean(temp_previous_games_df[,36]),
+                                     mean(temp_previous_games_df[,37]),mean(temp_previous_games_df[,38]),
+                                     mean(temp_previous_games_df[,39]),mean(temp_previous_games_df[,40]),
+                                     mean(temp_previous_games_df[,41]),mean(temp_previous_games_df[,42]),
+                                     mean(temp_previous_games_df[,43]),mean(temp_previous_games_df[,44]),
+                                     mean(temp_previous_games_df[,45]),
+                                     temp_team_df[row,46],temp_team_df[row,47],
+                                     temp_team_df[row,48],temp_team_df[row,49],
+                                     temp_team_df[row,50],mean(temp_oppt_previous_games_df[,6]),
+                                     mean(temp_oppt_previous_games_df[,7]),mean(temp_oppt_previous_games_df[,8]),
+                                     mean(temp_oppt_previous_games_df[,9]),mean(temp_oppt_previous_games_df[,10]),
+                                     mean(temp_oppt_previous_games_df[,11]),mean(temp_oppt_previous_games_df[,12]),
+                                     mean(temp_oppt_previous_games_df[,13]),mean(temp_oppt_previous_games_df[,14]),
+                                     mean(temp_oppt_previous_games_df[,15]),mean(temp_oppt_previous_games_df[,16]),
+                                     mean(temp_oppt_previous_games_df[,17]),mean(temp_oppt_previous_games_df[,18]),
+                                     mean(temp_oppt_previous_games_df[,19]),mean(temp_oppt_previous_games_df[,20]),
+                                     mean(temp_oppt_previous_games_df[,21]),mean(temp_oppt_previous_games_df[,22]),
+                                     mean(temp_oppt_previous_games_df[,23]),mean(temp_oppt_previous_games_df[,24]),
+                                     mean(temp_oppt_previous_games_df[,25]),mean(temp_oppt_previous_games_df[,26]),
+                                     mean(temp_oppt_previous_games_df[,27]),mean(temp_oppt_previous_games_df[,28]),
+                                     mean(temp_oppt_previous_games_df[,29]),mean(temp_oppt_previous_games_df[,30]),
+                                     mean(temp_oppt_previous_games_df[,31]),mean(temp_oppt_previous_games_df[,32]),
+                                     mean(temp_oppt_previous_games_df[,33]),mean(temp_oppt_previous_games_df[,34]),
+                                     mean(temp_oppt_previous_games_df[,35]),mean(temp_oppt_previous_games_df[,36]),
+                                     mean(temp_oppt_previous_games_df[,37]),mean(temp_oppt_previous_games_df[,38]),
+                                     mean(temp_oppt_previous_games_df[,39]),mean(temp_oppt_previous_games_df[,40]),
+                                     mean(temp_oppt_previous_games_df[,41]),mean(temp_oppt_previous_games_df[,42]),
+                                     mean(temp_oppt_previous_games_df[,43]),mean(temp_oppt_previous_games_df[,44]),
+                                     mean(temp_oppt_previous_games_df[,45]),temp_team_df[row,90],temp_team_df[row,91],
+                                     temp_team_df[row,92],temp_team_df[row,93])
+          
+        }
+        final_df <- rbind(final_df,temp_final_df)
+      }
+      
+    }
+    
+  }
+  names(final_df)<-c(names(dataframe[1:6]),"teamAveragePts",names(dataframe[7:50]),"opptAveragePts",names(dataframe[51:93]))
+  return(final_df)
+  
+}  
+
+OriginalFiveAverage.df <- create_df(5, relStats.df)
+OriginalFifteenAverage.df <- create_df(15, relStats.df)
+OriginalTwentyFiveAverage.df <- create_df(25, relStats.df)
+
+FiveAverage.df <- na.omit(OriginalFiveAverage.df)
+FifteenAverage.df <- na.omit(OriginalFifteenAverage.df)
+TwentyFiveAverage.df <- na.omit(OriginalFifteenAverage.df)
+```
+
+Variable Selection
+==================
+
+Next we are going to be doing some variable selection and remove variables that have high correlations. When looking at correlations, we will be temporarily removing variables that are not numeric and will not be used, such as gmDate.
+
+```{r}
+Five.CorrTest <- select(FiveAverage.df, -c('gmDate'))
+Fifteen.CorrTest <- select(FifteenAverage.df, -c('gmDate'))
+TwentyFive.CorrTest <- select(TwentyFiveAverage.df, -c('gmDate'))
+
+Five.Correlation <- cor(Five.CorrTest)
+Fifteen.Correlation <- cor(Fifteen.CorrTest)
+TwentyFive.Correlation <- cor(TwentyFive.CorrTest)
+
+Five.High_Correlations <- findCorrelation(Five.Correlation, cutoff = 0.5, names = TRUE)
+Fifteen.High_Correlations <- findCorrelation(Fifteen.Correlation, cutoff = 0.5, names = TRUE)
+TwentyFive.High_Correlations <- findCorrelation(TwentyFive.Correlation, cutoff = 0.5, names = TRUE)
+
+Five.High_Correlations
+Fifteen.High_Correlations
+TwentyFive.High_Correlations
+```
+As we can see, these are the variables that are highly correlated to each other. Some of these are very obvious, such as opptLoc having a perfect negative correlation to teamLoc. Below we will be combining some data to utilize metrics with high significance, based on research we have done. We will then remove the redundant variables and run the correlation again to ensure we have removed the redundant variables; therefore, making our data less noisy.
+
+```{r}
+FiveAverage.df$teamFTR <- (FiveAverage.df$teamFTM / FiveAverage.df$teamFGA)
+FiveAverage.df$opptFTR <- (FiveAverage.df$opptFTM / FiveAverage.df$opptFGA)
+FifteenAverage.df$teamFTR <- (FifteenAverage.df$teamFTM / FifteenAverage.df$teamFGA)
+FifteenAverage.df$opptFTR <- (FifteenAverage.df$opptFTM / FifteenAverage.df$opptFGA)
+TwentyFiveAverage.df$teamFTR <- (TwentyFiveAverage.df$teamFTM / TwentyFiveAverage.df$teamFGA)
+TwentyFiveAverage.df$opptFTR <- (TwentyFiveAverage.df$opptFTM / TwentyFiveAverage.df$opptFGA)
+
+FiveAverage.df <- select(FiveAverage.df, c('teamFIC', 'opptFIC', 'teamAveragePts', 'opptAveragePts', 'opptEFG.', 'teamEFG.', 'teamOrtg', 'opptOrtg', 'teamElo', 'opptElo', 'teamOREB.', 'teamTO.','teamRslt','teamDREB.', 'opptTO.', 'teamFTR', 'opptFTR'))
+FifteenAverage.df <- select(FifteenAverage.df, c('teamFIC', 'opptFIC', 'teamAveragePts', 'opptAveragePts', 'opptEFG.', 'teamEFG.', 'teamOrtg', 'opptOrtg', 'teamElo', 'opptElo', 'teamOREB.', 'teamTO.','teamRslt','teamDREB.', 'opptTO.', 'teamFTR', 'opptFTR'))
+TwentyFiveAverage.df <- select(TwentyFiveAverage.df, c('teamFIC', 'opptFIC', 'teamAveragePts', 'opptAveragePts', 'opptEFG.', 'teamEFG.', 'teamOrtg', 'opptOrtg', 'teamElo', 'opptElo', 'teamOREB.', 'teamTO.','teamRslt','teamDREB.', 'opptTO.', 'teamFTR', 'opptFTR'))
+
+Five.CorrTest_2 <- select(FiveAverage.df)
+Five.Correlation_2 <- cor(Five.CorrTest_2)
+Five.High__correlations_2 <- findCorrelation(Five.Correlation_2, cutoff = 0.5)
+Five.High__correlations_2
+corrplot(cor(FiveAverage.df), order = "hclust", addrect = 4)
+
+Fifteen.CorrTest_2 <- select(FifteenAverage.df)
+Fifteen.Correlation_2 <- cor(Fifteen.CorrTest_2)
+Fifteen.High__correlations_2 <- findCorrelation(Fifteen.Correlation_2, cutoff = 0.5)
+Fifteen.High__correlations_2
+corrplot(cor(FifteenAverage.df), order = "hclust", addrect = 4)
+
+TwentyFive.CorrTest_2 <- select(TwentyFiveAverage.df)
+TwentyFive.Correlation_2 <- cor(TwentyFive.CorrTest_2)
+TwentyFive.High__correlations_2 <- findCorrelation(TwentyFive.Correlation_2, cutoff = 0.5)
+TwentyFive.High__correlations_2
+corrplot(cor(TwentyFiveAverage.df), order = "hclust", addrect = 4)
+```
+As shown by the Correlation Plots above, it has significantly less than what we had before, however, there is still a decent amount. Since we have a decent amount of variables, it would be best to use selection methods to narrow them down even further; this way, we can get the most significant variables. We will first do this by ranking feature importance.
+
+```{r}
+set.seed(1)
+
+FiveAverage.df$teamRslt <- as.factor(FiveAverage.df$teamRslt)
+Five.Control_Parameters <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+Five.Variable_Ranking <- train(teamRslt~., data = FiveAverage.df, preProcess = "scale", trControl = Five.Control_Parameters)
+Five.Importance <- varImp(Five.Variable_Ranking, scale = FALSE)
+print(Five.Importance)
+plot(Five.Importance)
+
+FifteenAverage.df$teamRslt <- as.factor(FifteenAverage.df$teamRslt)
+Fifteen.Control_Parameters <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+Fifteen.Variable_Ranking <- train(teamRslt~., data = FifteenAverage.df, preProcess = "scale", trControl = Fifteen.Control_Parameters)
+Fifteen.Importance <- varImp(Fifteen.Variable_Ranking, scale = FALSE)
+print(Fifteen.Importance)
+plot(Fifteen.Importance)
+
+TwentyFiveAverage.df$teamRslt <- as.factor(TwentyFiveAverage.df$teamRslt)
+TwentyFive.Control_Parameters <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+TwentyFive.Variable_Ranking <- train(teamRslt~., data = TwentyFiveAverage.df, preProcess = "scale", trControl = TwentyFive.Control_Parameters)
+TwentyFive.Importance <- varImp(TwentyFive.Variable_Ranking, scale = FALSE)
+print(TwentyFive.Importance)
+plot(TwentyFive.Importance)
+```
+
+As we can see from this, the teamElo & OpptElo are a lot more significant than other variables; therefore, we will keep these for sure. Prior to cleaning our data further, we would like to utilize Recursive Feature Elimination to see if we can get some other insights.
+
+```{r}
+set.seed(2)
+
+FiveAverage.X <- select(FiveAverage.df, -c('teamRslt'))
+FifteenAverage.X <- select(FifteenAverage.df, - c('teamRslt'))
+TwentyFiveAverage.X <- select(TwentyFiveAverage.df, - c('teamRslt'))
+
+Five.RFEControl <- rfeControl(functions = rfFuncs, method = "cv", number = 10)
+Five.RFE <- rfe(FiveAverage.X, FiveAverage.df[[13]], sizes = c(1:16), rfeControl = Five.RFEControl)
+plot(Five.RFE, type = c("g", "o"))
+Five.RFE
+Five.RFE$bestSubset
+
+Fifteen.RFEControl <- rfeControl(functions = rfFuncs, method = "cv", number = 10)
+Fifteen.RFE <- rfe(FifteenAverage.X, FifteenAverage.df[[13]], sizes = c(1:16), rfeControl = Fifteen.RFEControl)
+plot(Fifteen.RFE, type = c("g", "o"))
+Fifteen.RFE
+Fifteen.RFE$bestSubset
+
+TwentyFive.RFEControl <- rfeControl(functions = rfFuncs, method = "cv", number = 10)
+TwentyFive.RFE <- rfe(TwentyFiveAverage.X, TwentyFiveAverage.df[[13]], sizes = c(1:16), rfeControl = TwentyFive.RFEControl)
+plot(TwentyFive.RFE, type = c("g", "o"))
+TwentyFive.RFE
+TwentyFive.RFE$bestSubset
+```
+
+As we can see above, a model with five variables has a relatively close accuracy to a model with almost all of them. To prevent overfitting, we will only use five. Since each variable selection method actually provided different important variables, we will test the top 5 of both.
+
+```{r}
+FiveAverage.df$teamRslt <- as.factor(FiveAverage.df$teamRslt)
+FifteenAverage.df$teamRslt <- as.factor(FifteenAverage.df$teamRslt)
+TwentyFiveAverage.df$teamRslt <- as.factor(TwentyFiveAverage.df$teamRslt)
+
+Five.Importance_Subset <- select(FiveAverage.df, c('teamRslt', 'teamElo', 'opptElo', 'teamOrtg', 'teamFIC', 'teamEFG.'))
+Fifteen.Importance_Subset <- select(FifteenAverage.df, c('teamRslt', 'teamElo', 'opptElo', 'teamOrtg', 'teamFIC', 'teamEFG.'))
+TwentyFive.Importance_Subset <- select(TwentyFiveAverage.df, c('teamRslt', 'teamElo', 'opptElo', 'teamOrtg', 'teamFIC', 'teamEFG.'))
+
+Five.RFE_Subset <- select(FiveAverage.df, c('teamRslt', 'teamElo', 'opptElo', 'opptFIC', 'teamOrtg', 'teamFIC'))
+Fifteen.RFE_Subset <- select(FifteenAverage.df, c('teamRslt', 'teamElo', 'opptElo', 'opptFIC', 'teamFIC', 'teamEFG.'))
+TwentyFive.RFE_Subset <- select(TwentyFiveAverage.df, c('teamRslt', 'teamElo', 'opptElo', 'opptFIC', 'teamFIC', 'teamEFG.'))
+```
+
+Model Selection
+================
+
+Here we are going to build and test our models. The three models that will be used are ... and we will be running both subsets through the model. We will also be looking at the Variable Inflation Factor and ensuring that it stays below ten for each variable. As we have 6 seasons, our training/test split will be 80/20 as that will give us roughly a whole season to test our model on.
+
+***Data Splitting***
+
+```{r}
+set.seed(100)
+ImportanceT <- createDataPartition(y=Five.Importance_Subset$teamRslt, p = .80, list = FALSE)
+RFET <- createDataPartition(y=Five.RFE_Subset$teamRslt, p = .80, list = FALSE)
+
+Importance_Training <- Importance_Subset[ImportanceT,]
+Importance_Testing <- Importance_Subset[-ImportanceT,]
+
+RFE_Training <- RFE_Subset[RFET,]
+RFE_Testing <- RFE_Subset[-RFET,]
+```
+
+***Logistic Regression***
+
+```{r}
+set.seed(3)
+
+Five.ImportanceT <- createDataPartition(y=Five.Importance_Subset$teamRslt, p = .80, list = FALSE)
+Five.RFET <- createDataPartition(y=Five.RFE_Subset$teamRslt, p = .80, list = FALSE)
+Five.Importance_Training <- Five.Importance_Subset[Five.ImportanceT,]
+Five.Importance_Testing <- Five.Importance_Subset[-Five.ImportanceT,]
+Five.RFE_Training <- Five.RFE_Subset[Five.RFET,]
+Five.RFE_Testing <- Five.RFE_Subset[-Five.RFET,]
+
+Fifteen.ImportanceT <- createDataPartition(y=Fifteen.Importance_Subset$teamRslt, p = .80, list = FALSE)
+Fifteen.RFET <- createDataPartition(y=Fifteen.RFE_Subset$teamRslt, p = .80, list = FALSE)
+Fifteen.Importance_Training <- Fifteen.Importance_Subset[Fifteen.ImportanceT,]
+Fifteen.Importance_Testing <- Fifteen.Importance_Subset[-Fifteen.ImportanceT,]
+Fifteen.RFE_Training <- Fifteen.RFE_Subset[Fifteen.RFET,]
+Fifteen.RFE_Testing <- Fifteen.RFE_Subset[-Fifteen.RFET,]
+
+TwentyFive.ImportanceT <- createDataPartition(y=TwentyFive.Importance_Subset$teamRslt, p = .80, list = FALSE)
+TwentyFive.RFET <- createDataPartition(y=TwentyFive.RFE_Subset$teamRslt, p = .80, list = FALSE)
+TwentyFive.Importance_Training <- TwentyFive.Importance_Subset[TwentyFive.ImportanceT,]
+TwentyFive.Importance_Testing <- TwentyFive.Importance_Subset[-TwentyFive.ImportanceT,]
+TwentyFive.RFE_Training <- TwentyFive.RFE_Subset[TwentyFive.RFET,]
+TwentyFive.RFE_Testing <- TwentyFive.RFE_Subset[-TwentyFive.RFET,]
+
+Five.Importance_Logistic <- glm(teamRslt~., data = Five.Importance_Training, family = "binomial")
+summary(Five.Importance_Logistic)
+confusionMatrix(table(predict(Five.Importance_Logistic, Five.Importance_Testing, type = "response") >= 0.5, Five.Importance_Testing$teamRslt == 2))
+vif(Five.Importance_Logistic)
+
+Five.RFE_Logistic <- glm(teamRslt~., data = Five.RFE_Training, family = "binomial")
+summary(Five.RFE_Logistic)
+confusionMatrix(table(predict(Five.RFE_Logistic, Five.RFE_Testing, type = "response") >= 0.5, Five.RFE_Testing$teamRslt == 2))
+vif(Five.RFE_Logistic)
+
+Fifteen.Importance_Logistic <- glm(teamRslt~., data = Fifteen.Importance_Training, family = "binomial")
+summary(Fifteen.Importance_Logistic)
+confusionMatrix(table(predict(Fifteen.Importance_Logistic, Fifteen.Importance_Testing, type = "response") >= 0.5, Fifteen.Importance_Testing$teamRslt == 2))
+vif(Fifteen.Importance_Logistic)
+
+Fifteen.RFE_Logistic <- glm(teamRslt~., data = Fifteen.RFE_Training, family = "binomial")
+summary(Fifteen.RFE_Logistic)
+confusionMatrix(table(predict(Fifteen.RFE_Logistic, Fifteen.RFE_Testing, type = "response") >= 0.5, Fifteen.RFE_Testing$teamRslt == 2))
+vif(Fifteen.RFE_Logistic)
+
+TwentyFive.Importance_Logistic <- glm(teamRslt~., data = TwentyFive.Importance_Training, family = "binomial")
+summary(TwentyFive.Importance_Logistic)
+confusionMatrix(table(predict(TwentyFive.Importance_Logistic, TwentyFive.Importance_Testing, type = "response") >= 0.5, TwentyFive.Importance_Testing$teamRslt == 2))
+vif(TwentyFive.Importance_Logistic)
+
+TwentyFive.RFE_Logistic <- glm(teamRslt~., data = TwentyFive.RFE_Training, family = "binomial")
+summary(TwentyFive.RFE_Logistic)
+confusionMatrix(table(predict(TwentyFive.RFE_Logistic, TwentyFive.RFE_Testing, type = "response") >= 0.5, TwentyFive.RFE_Testing$teamRslt == 2))
+vif(TwentyFive.RFE_Logistic)
+```
+
+Based on what we have seen here, the Importance Logistic Regression had an out of Sample Accuracy of 65.24% and the RFE Logistic Regression had an out of Sample Accuracy of 64.3%.
+
+
+***Classification Trees***
+
+```{r}
+set.seed(4)
+FiveAverage.T <- createDataPartition(y=FiveAverage.df$teamRslt, p = .80, list = FALSE)
+FifteenAverage.T <- createDataPartition(y=FifteenAverage.df$teamRslt, p = .80, list = FALSE)
+TwentyFiveAverage.T <- createDataPartition(y=TwentyFiveAverage.df$teamRslt, p = .80, list = FALSE)
+
+Five.Training <- FiveAverage.df[FiveAverage.T,]
+Fifteen.Training <- FifteenAverage.df[FifteenAverage.T,]
+TwentyFive.Training <- TwentyFiveAverage.df[TwentyFiveAverage.T,]
+
+Five.Testing <- FiveAverage.df[-FiveAverage.T,]
+Fifteen.Testing <- FifteenAverage.df[-FifteenAverage.T,]
+TwentyFive.Testing <- TwentyFiveAverage.df[-TwentyFiveAverage.T,]
+
+
+TreeTrain_Control <- trainControl(method = "cv", number = 10, savePredictions = TRUE)
+
+Five.Cart <- train(teamRslt~., data = Five.Training, trControl = TreeTrain_Control, tuneLength = 10, method = "rpart")
+plot(Five.Cart)
+confusionMatrix(predict(Five.Cart, Five.Testing), Five.Testing$teamRslt)
+
+Fifteen.Cart <- train(teamRslt~., data = Fifteen.Training, trControl = TreeTrain_Control, tuneLength = 10, method = "rpart")
+plot(Fifteen.Cart)
+confusionMatrix(predict(Fifteen.Cart, Fifteen.Testing), Fifteen.Testing$teamRslt)
+
+TwentyFive.Cart <- train(teamRslt~., data = TwentyFive.Training, trControl = TreeTrain_Control, tuneLength = 10, method = "rpart")
+plot(TwentyFive.Cart)
+confusionMatrix(predict(TwentyFive.Cart, TwentyFive.Testing), TwentyFive.Testing$teamRslt)
+```
+Based on what we have seen here, the Importance Classification Tree has an out of Sample Accuracy of 65.14% and the RFE Classification Tree has an out of Sample Accuracy of 63.12%. So far, it seems like the best model is the Logistic Importance Classification.
+
+***Random Forest***
+
+```{r}
+RandomForestTrain_Control <- trainControl(method = "CV", number = 10, savePredictions = TRUE)
+
+Five.RF <- train(teamRslt~., method = "rf", trControl = RandomForestTrain_Control, preProcess = c("center", "scale"), tuneLength = 2, data = Five.Training)
+Five.RF
+confusionMatrix(predict(Five.RF, Five.Testing), Five.Testing$teamRslt)
+
+Fifteen.RF <- train(teamRslt~., method = "rf", trControl = RandomForestTrain_Control, preProcess = c("center", "scale"), tuneLength = 2, data = Fifteen.Training)
+Fifteen.RF
+confusionMatrix(predict(Fifteen.RF, Fifteen.Testing), Fifteen.Testing$teamRslt)
+
+TwentyFive.RF <- train(teamRslt~., method = "rf", trControl = RandomForestTrain_Control, preProcess = c("center", "scale"), tuneLength = 2, data = TwentyFive.Training)
+TwentyFive.RF
+confusionMatrix(predict(TwentyFive.RF, TwentyFive.Testing), TwentyFive.Testing$teamRslt)
+
+
+Five.RF2 <- randomForest(teamRslt~., Five.Training)
+confusionMatrix(predict(Five.RF2, Five.Testing), Five.Testing$teamRslt)
+
+Fifteen.RF2 <- randomForest(teamRslt~., Fifteen.Training)
+confusionMatrix(predict(Fifteen.RF2, Fifteen.Testing), Fifteen.Testing$teamRslt)
+
+TwentyFive.RF2 <- randomForest(teamRslt~., TwentyFive.Training)
+confusionMatrix(predict(TwentyFive.RF2, TwentyFive.Testing), TwentyFive.Testing$teamRslt)
+```
+
+Based off of the data above, the Importance Random Forest Model has an out of Sample Accuracy of 62.82% and the RFE Random Forest Model has an out of Sample Accuracy of 61.14%. Using the Random Forest Function, the Importance model has an out of Sample Accuracy of 62.57% and the RFE Random Forest model has an out of Sample Accuracy of 61.49%. As of right now, the Importance Logistic Model is still the best.
+
+***Support Vector Machine***
+
+```{r}
+Five.SVM <- svm(teamRslt~., data = Five.Training)
+confusionMatrix(predict(Five.SVM, Five.Testing), Five.Testing$teamRslt)
+
+Five.X <- dplyr::select(Five.Training, -c('teamRslt'))
+Five.Y <- dplyr::select(Five.Training, c('teamRslt'))
+
+Five.SVMTune <- tune(svm, teamRslt~., data = Five.Training, ranges = list(cost = 10^(-1:2), gamma = c(0.5,1,2)))
+
+Five.BestSVM <- Five.SVMTune$best.model
+
+confusionMatrix(predict(Five.BestSVM, Five.Testing), Five.Testing$teamRslt)
+
+Fifteen.SVM <- svm(teamRslt~., data = Fifteen.Training)
+confusionMatrix(predict(Fifteen.SVM, Fifteen.Testing), Fifteen.Testing$teamRslt)
+
+Fifteen.X <- dplyr::select(Fifteen.Training, -c('teamRslt'))
+Fifteen.Y <- dplyr::select(Fifteen.Training, c('teamRslt'))
+
+Fifteen.SVMTune <- tune(svm, teamRslt~., data = Fifteen.Training, ranges = list(cost = 10^(-1:2), gamma = c(0.5,1,2)))
+
+Fifteen.BestSVM <- Fifteen.SVMTune$best.model
+
+confusionMatrix(predict(Fifteen.BestSVM, Fifteen.Testing), Fifteen.Testing$teamRslt)
+
+TwentyFive.SVM <- svm(teamRslt~., data = TwentyFive.Training)
+confusionMatrix(predict(TwentyFive.SVM, TwentyFive.Testing), TwentyFive.Testing$teamRslt)
+
+TwentyFive.X <- dplyr::select(TwentyFive.Training, -c('teamRslt'))
+TwentyFive.Y <- dplyr::select(TwentyFive.Training, c('teamRslt'))
+
+TwentyFive.SVMTune <- tune(svm, teamRslt~., data = TwentyFive.Training, ranges = list(cost = 10^(-1:2), gamma = c(0.5,1,2)))
+
+TwentyFive.BestSVM <- TwentyFive.SVMTune$best.model
+
+TwentyFive.SVMTuned <- svm(teamRslt~., data = TwentyFive.Training, cost = 0.1, gamma = 1)
+confusionMatrix(predict(TwentyFive.SVMTuned, TwentyFive.Testing), TwentyFive.Testing$teamRslt)
+```
+Based on this data, we can see that the untuned Importance SVM Model has an out of sample accuracy of 65.48% and the untuned RFE SVM Model has an out of sample accuracy of 64.25%. After tuning, the Importance SVM Model has an out of sample accuracy of 65.19% and the tuned RFE SVM Model has an out of sample accuracy of 63.76%. 
+
+Based on this, it seems that the Variables retrieved from the Importance Ranking lead to better out of sample accuracy than the variables retrieved from the RFE. The top three models using the Importance Variables (teamElo, opptElo, teamOrtg, teamFic, & teamEFG%) were the untuned SVM with an out of sample accuracy of 65.48%, the Logarithmic Model with an out of sample accuracy of 65.24%, and the Tuned SVM model with an out of sample accuracy of 65.19%. Below, we will be inputting game-day data from ten NBA teams and running it through each model to test our predictive accuracy even further.
+
+
+
+
+
+
